@@ -124,9 +124,13 @@ button{font-family:var(--font)}
 .k-hdr.s-signed{background:var(--green-bg);color:var(--green);border-color:var(--green-dim)}
 
 /* ── CARD ── */
-.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px 12px 10px 14px;cursor:pointer;transition:all .15s;position:relative;overflow:hidden}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px 12px 10px 14px;cursor:grab;transition:all .15s;position:relative;overflow:hidden}
+.card:active{cursor:grabbing}
 .card:hover{border-color:var(--border2);box-shadow:var(--shadow-md);transform:translateY(-1px)}
 .card.overdue{border-left:3px solid var(--red)}
+.card.dragging{opacity:.4;transform:scale(.98)}
+.k-col.drag-over .k-drop-zone{background:var(--yellow-bg);border-color:var(--yellow);border-style:dashed}
+.k-drop-zone{border:2px dashed transparent;border-radius:var(--radius-sm);min-height:40px;transition:all .15s;padding:4px}
 .card-stripe{position:absolute;left:0;top:0;bottom:0;width:3px}
 .card-stripe.hot{background:var(--red)}
 .card-stripe.warm{background:var(--yellow)}
@@ -376,11 +380,26 @@ function ScoreBadge({ score }) {
 }
 
 /* ─── KANBAN CARD ───────────────────────────────────────────────────────── */
-function KanbanCard({ p, onClick }) {
+function KanbanCard({ p, onClick, onDragStart }) {
   const t = TIER(p.score);
   const overdue = isOverdue(p);
+  const [dragging, setDragging] = useState(false);
+
+  const handleDragStart = (e) => {
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("prospectId", p.id);
+    setDragging(true);
+    onDragStart && onDragStart(p.id);
+  };
+
   return (
-    <div className={`card ${overdue ? "overdue" : ""}`} onClick={() => onClick(p)}>
+    <div
+      className={`card ${overdue ? "overdue" : ""} ${dragging ? "dragging" : ""}`}
+      draggable
+      onDragStart={handleDragStart}
+      onDragEnd={() => setDragging(false)}
+      onClick={() => onClick(p)}
+    >
       <div className={`card-stripe ${p.status === "signed" ? "signed" : t}`} />
       <div className="card-top">
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -1089,6 +1108,7 @@ export default function App() {
   const [showImport, setShowImport] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [dragOver, setDragOver] = useState(null);
 
   useEffect(() => {
     loadProspects();
@@ -1299,15 +1319,37 @@ export default function App() {
                   {KANBAN_COLS.map(status => {
                     const cards = base.filter(p => p.status === status);
                     return (
-                      <div key={status} className="k-col">
+                      <div key={status} className={`k-col ${dragOver === status ? "drag-over" : ""}`}
+                        onDragOver={e => { e.preventDefault(); setDragOver(status); }}
+                        onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget)) setDragOver(null); }}
+                        onDrop={async e => {
+                          e.preventDefault();
+                          setDragOver(null);
+                          const id = e.dataTransfer.getData("prospectId");
+                          if (!id) return;
+                          const prospect = prospects.find(p => p.id === id);
+                          if (!prospect || prospect.status === status) return;
+                          // Optimistic update
+                          setProspects(prev => prev.map(p => p.id === id ? { ...p, status } : p));
+                          // Log l'action
+                          const log = parseLog(prospect.action_log);
+                          const entry = { date: new Date().toISOString(), text: `Statut → ${STATUS_LABELS[status]}`, type: status, author: prospect.assigned_to || "—" };
+                          const newLog = JSON.stringify([entry, ...log]);
+                          await supabase.from("prospects").update({ status, action_log: newLog }).eq("id", id);
+                        }}
+                      >
                         <div className={`k-hdr s-${status}`}>
                           <span>{STATUS_LABELS[status]}</span>
                           <span>{cards.length}</span>
                         </div>
-                        {cards.length === 0
-                          ? <div style={{ padding: "20px 10px", textAlign: "center", color: "var(--text3)", fontSize: 11, fontStyle: "italic" }}>Vide</div>
-                          : cards.map(p => <KanbanCard key={p.id} p={p} onClick={setSelected} />)
-                        }
+                        <div className="k-drop-zone">
+                          {cards.length === 0
+                            ? <div style={{ padding: "16px 10px", textAlign: "center", color: "var(--text3)", fontSize: 11, fontStyle: "italic" }}>
+                                {dragOver === status ? "Déposer ici" : "Vide"}
+                              </div>
+                            : cards.map(p => <KanbanCard key={p.id} p={p} onClick={setSelected} />)
+                          }
+                        </div>
                       </div>
                     );
                   })}
