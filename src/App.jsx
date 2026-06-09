@@ -1132,23 +1132,34 @@ export default function App() {
 
   const handleImport = async (newProspects) => {
     setImporting(true);
+    let added = 0, updated = 0, failed = 0;
     for (const p of newProspects) {
-      const { data: existing } = await supabase.from("prospects").select("id").ilike("company", p.company).single();
-      if (existing) {
-        await supabase.from("prospects").update({
-          score: p.score, signals: p.signals, signal_details: p.signal_details,
-          score_reasons: p.score_reasons, brief_date: p.brief_date, type: p.type,
-          sector: p.sector, location: p.location, size: p.size,
-          accroche: p.accroche, company_context: p.company_context,
-          contact_name: p.contact_name, contact_role: p.contact_role,
-        }).eq("id", existing.id);
-      } else {
-        await supabase.from("prospects").insert(p);
+      try {
+        const { data: existing } = await supabase
+          .from("prospects").select("id").ilike("company", p.company).maybeSingle();
+        if (existing) {
+          await supabase.from("prospects").update({
+            score: p.score, signals: p.signals, signal_details: p.signal_details,
+            score_reasons: p.score_reasons, brief_date: p.brief_date, type: p.type,
+            sector: p.sector, location: p.location, size: p.size,
+            accroche: p.accroche, company_context: p.company_context,
+            contact_name: p.contact_name, contact_role: p.contact_role,
+          }).eq("id", existing.id);
+          updated++;
+        } else {
+          const { error } = await supabase.from("prospects").insert(p);
+          if (error) { failed++; console.error("Insert échoué:", p.company, error.message); }
+          else added++;
+        }
+      } catch (e) {
+        failed++;
+        console.error("Erreur import:", p.company, e);
       }
     }
     setImporting(false);
     setShowImport(false);
     await loadProspects();
+    alert(`Import terminé : ${added} ajoutés, ${updated} mis à jour${failed ? `, ${failed} échoués (voir console)` : ""}.`);
   };
 
   const saveFiche = async (updated) => {
